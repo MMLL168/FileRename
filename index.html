@@ -1,17 +1,50 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Upload, FileDigit, Download, RefreshCw, Trash2, Settings, ArrowRight, FileType } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, FileDigit, Download, RefreshCw, Trash2, Settings, ArrowRight, FileType, AlertCircle } from 'lucide-react';
 
-// Helper to load external scripts (for JSZip)
-const loadScript = (src) => {
+// Helper: Robust script loader with check for existing global
+const loadJSZip = () => {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
-      resolve();
+    // 1. Check if JSZip is already available (e.g., via npm install or previous load)
+    if (window.JSZip) {
+      resolve(window.JSZip);
       return;
     }
+
+    const src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    
+    // 2. Check if script tag already exists
+    if (document.querySelector(`script[src="${src}"]`)) {
+      // If it exists but window.JSZip isn't ready, we might need to wait or assume it's loading.
+      // For simplicity, we create a new one only if not found, 
+      // but strictly relying on onload is safer. 
+      // If it's already there, we poll briefly.
+      let attempts = 0;
+      const interval = setInterval(() => {
+        if (window.JSZip) {
+          clearInterval(interval);
+          resolve(window.JSZip);
+        }
+        attempts++;
+        if (attempts > 20) { // Timeout after 2s
+          clearInterval(interval);
+          reject(new Error("Timeout waiting for existing script"));
+        }
+      }, 100);
+      return;
+    }
+
+    // 3. Load from CDN
     const script = document.createElement('script');
     script.src = src;
-    script.onload = resolve;
-    script.onerror = reject;
+    script.async = true;
+    script.onload = () => {
+      if (window.JSZip) {
+        resolve(window.JSZip);
+      } else {
+        reject(new Error("Script loaded but JSZip object not found"));
+      }
+    };
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
     document.head.appendChild(script);
   });
 };
@@ -22,27 +55,32 @@ export default function App() {
   const [minDigits, setMinDigits] = useState(2);
   const [prefix, setPrefix] = useState('');
   const [isZipping, setIsZipping] = useState(false);
-  const [libLoaded, setLibLoaded] = useState(false);
+  const [libStatus, setLibStatus] = useState('loading'); // 'loading', 'ready', 'error'
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // Load JSZip on mount
+  // Initialize JSZip
   useEffect(() => {
-    loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js')
-      .then(() => setLibLoaded(true))
-      .catch((e) => console.error("Failed to load JSZip", e));
+    loadJSZip()
+      .then(() => setLibStatus('ready'))
+      .catch((e) => {
+        console.error("JSZip Load Error:", e);
+        setLibStatus('error');
+        setErrorMessage(e.message || "核心組件載入失敗");
+      });
   }, []);
 
-  // Handle File Upload
   const handleFileUpload = (e) => {
     const selectedFiles = Array.from(e.target.files);
     
-    // Natural Sort Algorithm (Intellectual sorting: 1, 2, 10 instead of 1, 10, 2)
+    // Natural Sort Algorithm
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     
-    // Combine with existing files and re-sort
     setFiles(prev => {
       const combined = [...prev, ...selectedFiles];
-      // Remove duplicates based on name + size + lastModified (simple dedup)
-      const unique = combined.filter((v, i, a) => a.findIndex(t => (t.name === v.name && t.size === v.size)) === i);
+      // Dedup based on name + size + lastModified
+      const unique = combined.filter((v, i, a) => 
+        a.findIndex(t => (t.name === v.name && t.size === v.size && t.lastModified === v.lastModified)) === i
+      );
       return unique.sort((a, b) => collator.compare(a.name, b.name));
     });
   };
@@ -53,7 +91,6 @@ export default function App() {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Generate New Name Logic
   const getNewName = (originalName, index) => {
     const extension = originalName.slice((Math.max(0, originalName.lastIndexOf(".")) || Infinity));
     const num = startNum + index;
@@ -61,10 +98,9 @@ export default function App() {
     return `${prefix}${numStr}${extension}`;
   };
 
-  // Handle Zip & Download
   const handleDownload = async () => {
-    if (!libLoaded || !window.JSZip) {
-      alert("核心組件尚未載入，請稍後再試或重新整理頁面。");
+    if (libStatus !== 'ready' || !window.JSZip) {
+      alert("錯誤：壓縮核心尚未就緒，請檢查網路連線或重新整理。");
       return;
     }
 
@@ -90,7 +126,7 @@ export default function App() {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Zipping error:", error);
-      alert("打包失敗，請檢查檔案是否過大。");
+      alert("打包過程發生錯誤，請稍後再試。");
     } finally {
       setIsZipping(false);
     }
@@ -101,21 +137,49 @@ export default function App() {
       <div className="max-w-5xl mx-auto space-y-6">
         
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-2">
               <RefreshCw className="w-8 h-8 text-blue-600" />
               Batch File Renamer
             </h1>
             <p className="text-slate-500 mt-1">
-              硬體工程師專用：批次重新編號工具 (Local Processing)
+              硬體工程師專用：批次重新編號工具 (Browser-based)
             </p>
           </div>
-          <div className="hidden md:block text-xs text-slate-400 text-right">
-            <div>Current Time: {new Date().toLocaleTimeString()}</div>
-            <div>Mode: Client-side Safe</div>
+          
+          <div className="flex flex-col items-end gap-1">
+            <div className="text-xs text-slate-400">
+              Current Time: {new Date().toLocaleTimeString()}
+            </div>
+            {/* Status Indicator */}
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-slate-500">Core Status:</span>
+              {libStatus === 'loading' && <span className="text-yellow-600 flex items-center gap-1">Loading...</span>}
+              {libStatus === 'ready' && <span className="text-green-600 font-medium flex items-center gap-1">● Ready</span>}
+              {libStatus === 'error' && (
+                <span className="text-red-600 font-bold flex items-center gap-1" title={errorMessage}>
+                  <AlertCircle size={14} /> Failed (Check Console)
+                </span>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* Error Banner if Script Fails */}
+        {libStatus === 'error' && (
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="font-bold">核心組件載入失敗 (JSZip Load Failed)</h3>
+              <p className="text-sm mt-1">
+                這通常是因為網路問題或瀏覽器安全性設定 (CSP) 阻擋了 CDN 腳本。
+                <br />
+                <strong>解決方案：</strong> 如果你是部署到 GitHub Pages，建議在專案中執行 <code>npm install jszip</code> 並重新 build。
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Main Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -124,15 +188,20 @@ export default function App() {
           <div className="lg:col-span-1 space-y-6">
             
             {/* Upload Zone */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border-2 border-dashed border-slate-300 hover:border-blue-500 transition-colors relative">
+            <div className={`bg-white p-6 rounded-xl shadow-sm border-2 border-dashed transition-colors relative ${
+              libStatus === 'ready' ? 'border-slate-300 hover:border-blue-500' : 'border-slate-200 opacity-75 cursor-not-allowed'
+            }`}>
               <input 
                 type="file" 
                 multiple 
+                disabled={libStatus !== 'ready'}
                 onChange={handleFileUpload} 
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
               />
               <div className="text-center space-y-3 pointer-events-none">
-                <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto ${
+                  libStatus === 'ready' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'
+                }`}>
                   <Upload size={24} />
                 </div>
                 <div>
@@ -158,7 +227,6 @@ export default function App() {
                     onChange={(e) => setStartNum(parseInt(e.target.value) || 0)}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
                   />
-                  <p className="text-xs text-slate-400 mt-1">例如: 輸入 17，第一個檔案即為 17.ext</p>
                 </div>
 
                 <div>
@@ -168,24 +236,24 @@ export default function App() {
                       <button
                         key={digit}
                         onClick={() => setMinDigits(digit)}
-                        className={`flex-1 py-1 text-sm border rounded ${minDigits === digit ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                        className={`flex-1 py-1 text-sm border rounded transition-colors ${minDigits === digit ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
                       >
                         {digit}位
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">
-                    預覽: {String(startNum).padStart(minDigits, '0')}
+                  <p className="text-xs text-slate-400 mt-1 font-mono text-right">
+                    Preview: {prefix}{String(startNum).padStart(minDigits, '0')}.ext
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-600 mb-1">前綴文字 (Prefix) - 選填</label>
+                  <label className="block text-sm font-medium text-slate-600 mb-1">前綴文字 (Prefix)</label>
                   <input 
                     type="text" 
                     value={prefix}
                     onChange={(e) => setPrefix(e.target.value)}
-                    placeholder="例如: img_"
+                    placeholder="e.g. IMG_"
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                   />
                 </div>
@@ -197,7 +265,7 @@ export default function App() {
               <div className="space-y-3">
                 <button 
                   onClick={handleDownload}
-                  disabled={isZipping || !libLoaded}
+                  disabled={isZipping || libStatus !== 'ready'}
                   className={`w-full flex items-center justify-center gap-2 py-3 rounded-lg text-white font-semibold shadow-lg transition-all ${
                     isZipping ? 'bg-slate-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-blue-200'
                   }`}
@@ -207,7 +275,7 @@ export default function App() {
                   ) : (
                     <>
                       <Download size={20} />
-                      下載 ZIP 檔案 ({files.length} files)
+                      下載 ZIP 檔案 ({files.length})
                     </>
                   )}
                 </button>
@@ -229,7 +297,7 @@ export default function App() {
                 重新命名預覽
               </h2>
               <span className="text-xs bg-slate-200 px-2 py-1 rounded text-slate-600">
-                Total: {files.length}
+                Count: {files.length}
               </span>
             </div>
             
