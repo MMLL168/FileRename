@@ -73,8 +73,19 @@
 
             // 處理檔案上傳與智慧排序
             const handleFileUpload = (e) => {
-                const selectedFiles = Array.from(e.target.files || e.dataTransfer.files);
+                let fileList = [];
                 
+                // FIX: 優先檢查 e.dataTransfer (拖放來源)，其次才是 e.target.files (點擊上傳來源)
+                // 原先寫法會被 input 的空 e.target.files 截斷，導致拖放無效
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    fileList = e.dataTransfer.files;
+                } else if (e.target && e.target.files && e.target.files.length > 0) {
+                    fileList = e.target.files;
+                }
+
+                const selectedFiles = Array.from(fileList);
+                if (selectedFiles.length === 0) return; // 沒有檔案則退出
+
                 // Natural Sort Algorithm (自然排序法)
                 // 讓 "1.jpg, 2.jpg, 10.jpg" 排序正確，而不是 "1, 10, 2"
                 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -99,11 +110,34 @@
                 return `${prefix}${numStr}${extension}`;
             };
 
-            // 拖曳處理
-            const onDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
-            const onDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+            // 拖曳處理事件
+            const onDragEnter = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(true);
+            };
+
+            const onDragOver = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // 必須在這裡也設為 true，防止閃爍
+                if (!isDragging) setIsDragging(true);
+            };
+
+            const onDragLeave = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // 只有當離開的目標是真正離開區域時才取消高亮
+                // (解決子元素導致的閃爍問題，這裡簡單處理直接取消，因為有 overlay)
+                if (e.currentTarget.contains(e.relatedTarget)) return;
+                
+                setIsDragging(false);
+            };
+
             const onDrop = (e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 setIsDragging(false);
                 handleFileUpload(e);
             };
@@ -172,8 +206,9 @@
                                 
                                 {/* 上傳區塊 (支援拖曳) */}
                                 <div 
-                                    className={`bg-white p-8 rounded-xl shadow-sm border-2 border-dashed transition-all duration-200 relative group cursor-pointer
-                                        ${isDragging ? 'drag-active' : 'border-slate-300 hover:border-blue-500 hover:bg-slate-50'}`}
+                                    className={`bg-white p-8 rounded-xl shadow-sm border-2 border-dashed transition-all duration-200 relative group cursor-pointer overflow-hidden
+                                        ${isDragging ? 'drag-active scale-[1.02]' : 'border-slate-300 hover:border-blue-500 hover:bg-slate-50'}`}
+                                    onDragEnter={onDragEnter}
                                     onDragOver={onDragOver}
                                     onDragLeave={onDragLeave}
                                     onDrop={onDrop}
@@ -183,16 +218,27 @@
                                         multiple 
                                         onChange={handleFileUpload} 
                                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                        title="" 
                                     />
-                                    <div className="text-center space-y-3 pointer-events-none">
-                                        <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                                    <div className="text-center space-y-3 pointer-events-none relative z-0">
+                                        <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto transition-all duration-300
+                                            ${isDragging ? 'bg-blue-100 text-blue-600 scale-110' : 'bg-blue-50 text-blue-600 group-hover:scale-110'}`}>
                                             <Icons.Upload className="w-6 h-6" />
                                         </div>
                                         <div>
-                                            <p className="font-semibold text-slate-700">點擊或拖放檔案</p>
+                                            <p className={`font-semibold transition-colors ${isDragging ? 'text-blue-700' : 'text-slate-700'}`}>
+                                                {isDragging ? 'Drop files here!' : '點擊或拖放檔案'}
+                                            </p>
                                             <p className="text-xs text-slate-400 mt-1">支援圖片、Log、PDF 等任意格式</p>
                                         </div>
                                     </div>
+                                    
+                                    {/* 拖曳時的覆蓋層 (Visual Feedback) */}
+                                    {isDragging && (
+                                        <div className="absolute inset-0 bg-blue-50/50 pointer-events-none z-0 flex items-center justify-center">
+                                            <div className="absolute inset-0 border-4 border-blue-400 rounded-xl animate-pulse"></div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* 設定面板 */}
